@@ -16,11 +16,8 @@ Serial dilution:
     Each step transfers ``sample`` parts of the previous (concentrated) well
     into ``buffer`` parts of fresh diluent in the next well, so
     C_new = C_old * sample / (sample + buffer). Passed as ``--dilution sample:buffer``
-    (default ``1:1``, i.e. equal parts → factor 1/2 = 2-fold dilution per step).
-
-Usage:
-    python dcpip_standard_curve.py path/to/standard_curve.xlsx
-    python dcpip_standard_curve.py path/to/standard_curve.xlsx \\
+        (default ``40:60``, i.e. 40 µL passed between wells with 60 µL fresh
+        buffer already in the well → factor 0.4 per step).
         --start-conc 300 --dilution 6:1
 """
 
@@ -36,7 +33,8 @@ import openpyxl
 
 
 DEFAULT_START_CONC_UM: float = 300.0
-DEFAULT_DILUTION_RATIO: str = "1:1"  # sample:buffer -> factor 1/2 per step (2-fold)
+# 40 µL passed between wells into 60 µL fresh buffer -> factor 0.4 per step.
+DEFAULT_DILUTION_RATIO: str = "40:60"
 DEFAULT_OUTPUT_SUBDIR: str = "outputs"
 
 # (pH, first_col, last_col_inclusive); pH 7 is used as the "primary" fit that
@@ -86,7 +84,7 @@ class StandardCurveResult:
     primary_ph: float = PRIMARY_PH
     start_conc_uM: float = DEFAULT_START_CONC_UM
     dilution_ratio: str = DEFAULT_DILUTION_RATIO
-    dilution_factor: float = 1.0 / 7.0
+    dilution_factor: float = 0.4
     source: Path | None = None
 
     def _primary(self) -> PhFit:
@@ -123,8 +121,8 @@ def main() -> None:
                         help=f"Starting [DCPIP] in row A (µM). Default {DEFAULT_START_CONC_UM}.")
     parser.add_argument("--dilution", type=str, default=DEFAULT_DILUTION_RATIO,
                         help="Per-step dilution as 'sample:buffer' ratio. "
-                             f"Default {DEFAULT_DILUTION_RATIO} (equal parts → factor 1/2, "
-                             "i.e. 2-fold per step).")
+                             f"Default {DEFAULT_DILUTION_RATIO} (40 µL passed between wells "
+                             "into 60 µL fresh buffer → factor 0.4 per step).")
     parser.add_argument("--sheet", type=str, default=None,
                         help="Sheet name (default: first sheet).")
     parser.add_argument("--title", type=str, default="",
@@ -157,7 +155,7 @@ def parse_dilution_ratio(s: str) -> float:
 
     Each step adds ``sample`` parts of the previous well into ``buffer`` parts
     of fresh diluent, so ``C_new = C_old * sample / (sample + buffer)``.
-    Examples: ``'1:1'`` -> 1/2, ``'1:5'`` -> 1/6, ``'1:9'`` -> 1/10.
+    Examples: ``'40:60'`` -> 0.4, ``'1:1'`` -> 0.5, ``'1:5'`` -> 1/6.
     A bare number in (0, 1) is taken as the factor directly.
     """
     txt = s.strip()

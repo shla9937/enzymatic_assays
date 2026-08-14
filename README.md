@@ -48,14 +48,27 @@ the origin, $A_{\text{corr}} = \varepsilon_{\text{app}} \cdot [\text{DCPIP}]$,
 independently for each pH. The pH 7 slope is exposed as the primary
 `eps_app` that the kcat pipeline consumes.
 
-Serial dilution is specified as a `sample:buffer` ratio; `1:1` means equal
-parts (per-step factor 1/2, i.e. 2-fold).
+Serial dilution is specified as a `sample:buffer` ratio (parts transferred vs.
+parts already in the destination well). The default is `40:60` — 40 µL passed
+between wells into 60 µL of fresh buffer, giving a factor of 0.4 per step.
+With the default 300 µM starting concentration, rows A→O of each column carry:
+
+| Row | [DCPIP] (µM) | Row | [DCPIP] (µM) |
+| :-: | -----------: | :-: | -----------: |
+|  A  |      300     |  I  |      0.197   |
+|  B  |      120     |  J  |      0.0786  |
+|  C  |       48     |  K  |      0.0315  |
+|  D  |       19.2   |  L  |      0.0126  |
+|  E  |        7.68  |  M  |      0.00503 |
+|  F  |        3.07  |  N  |      0.00201 |
+|  G  |        1.23  |  O  |      0.000805|
+|  H  |        0.492 |  P  |      0 (blank) |
 
 Example:
 
 ```bash
 python adh/scripts/dcpip_standard_curve.py adh/test/260731_dcpip_standard_curve.xlsx \
-    --start-conc 300 --dilution 1:1
+    --start-conc 300 --dilution 40:60
 ```
 
 Outputs (into `adh/outputs/`):
