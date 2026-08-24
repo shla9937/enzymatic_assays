@@ -1015,10 +1015,6 @@ def compare_conditions(
 # Single-plate driver + CSV/stats dump
 # =============================================================================
 
-# Wells whose ΔA (start-plateau) is not clearly above the water-control distribution
-# are treated as "no enzyme added" and excluded from downstream stats/heatmap.
-AUTO_EXCLUDE_SIGMA: float = 3.0
-
 # Seconds from t = 0 used as the raw-Abs region for the plate-quality Z'.
 Z_PRIME_WINDOW_S: float = 300.0
 
@@ -1069,48 +1065,6 @@ def _looks_rotated_180(traces: PlateTraces) -> bool:
     return abs(a_split) > 3.0 * max(abs(p_split), 0.05)
 
 
-def _auto_detect_bad_wells(
-    traces: PlateTraces,
-    layout: PlateLayout,
-    *,
-    sigma: float = AUTO_EXCLUDE_SIGMA,
-    edge_frac: float = 0.1,
-) -> set[str]:
-    """Flag enzyme wells whose total absorbance drop is indistinguishable
-    from the water (negative) control distribution.
-
-    ΔA is the mean of the first ``edge_frac`` of the trace minus the mean of
-    the last ``edge_frac`` (positive when DCPIP is being reduced). A well is
-    flagged when its ΔA is below ``water_mean + sigma * water_std``.
-    """
-    def _delta_a(w: str) -> float:
-        a = traces.traces.get(w)
-        if a is None or len(a) < 4:
-            return float("nan")
-        n = max(3, int(round(len(a) * edge_frac)))
-        head, tail = a[:n], a[-n:]
-        if not np.any(np.isfinite(head)) or not np.any(np.isfinite(tail)):
-            return float("nan")
-        return float(np.nanmean(head) - np.nanmean(tail))
-
-    water = np.array([_delta_a(w) for w in traces.traces
-                      if layout.is_water_control(w)])
-    water = water[np.isfinite(water)]
-    if water.size < 3:
-        return set()
-    threshold = float(np.mean(water) + sigma * np.std(water))
-
-    bad: set[str] = set()
-    for w in traces.traces:
-        if (layout.is_water_control(w) or layout.is_tcep_control(w)
-                or layout.is_no_substrate(w) or layout.is_no_metal(w)):
-            continue
-        d = _delta_a(w)
-        if not np.isfinite(d) or d < threshold:
-            bad.add(w)
-    return bad
-
-
 def analyze_plate(
     xlsx_path: Path,
     *,
@@ -1131,13 +1085,8 @@ def analyze_plate(
     if apply_rotation:
         traces = _rotate_traces_180(traces)
     fits = compute_well_fits(traces, layout, eps_app, enzyme_uM, window_s=window_s)
-    excluded = _auto_detect_bad_wells(traces, layout)
-    for w in excluded:
-        f = fits.get(w)
-        if f is not None:
-            f.kcat_s = float("nan")
     result = PlateResult(traces=traces, layout=layout, fits=fits,
-                         eps_app=eps_app, enzyme_uM=enzyme_uM, excluded=excluded,
+                         eps_app=eps_app, enzyme_uM=enzyme_uM,
                          baseline_trace=_water_baseline_trace(traces, layout),
                          rotate_mode=rotate,
                          rotation_detected=detected,
