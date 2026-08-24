@@ -23,7 +23,8 @@ Plate layout (test plate; ``PlateLayout`` for real plates)
     Screen plate (``PlateLayout`` / ``make_screen_plate_layout``):
         * Columns 1..N_METALS -> metals (see ``METALS``)
         * Rows A..O           -> alcohols (see ``ALCOHOLS``)
-        * Row P               -> no substrate
+        * Row P cols 1-12     -> water (negative control)
+        * Row P cols 13-24    -> TCEP (positive control; reduces DCPIP directly)
 
 Usage
 -----
@@ -96,18 +97,18 @@ ALCOHOLS: list[str] = [
     "methanol",
     "ethanol",
     "1-propanol",
-    "2-propanol",
     "1-butanol",
-    "2-butanol",
-    "isobutanol",
-    "tert-butanol",
+    "3-methyl-1-butanol",
     "1-pentanol",
+    "2-methyl-1-butanol",
     "1-hexanol",
-    "cyclohexanol",
-    "benzyl alcohol",
+    "1,5-pentanediol",
     "2-phenylethanol",
-    "allyl alcohol",
-    "ethylene glycol",
+    "4-hydroxybenzyl alcohol",
+    "vanillin",
+    "protocatechuic acid",
+    "vanillyl alcohol",
+    "vanillic acid",
 ]
 
 # Control markers appearing in the well-condition dict.
@@ -598,25 +599,34 @@ def make_screen_plate_layout(
 ) -> PlateLayout:
     """Layout for real screening plates.
 
-    Rows A..O -> alcohols; row P -> no substrate.
-    Cols 1..len(metals) -> metals; any leftover cols -> no-metal control.
-    If ``len(metals) >= 24`` there is no room for a no-metal column and col 24
-    holds the 24th metal instead. Truncates silently if lists exceed row/col count.
+    Rows A..O -> alcohols (one per row); cols 1..len(metals) -> metals.
+    Any leftover cols become no-metal controls. If ``len(metals) >= 24`` there
+    is no room for a no-metal column and col 24 holds the 24th metal instead.
+    Truncates silently if lists exceed row/col count.
+
+    Row P mirrors the test-plate control row so that Z' and baseline correction
+    work identically to the test mode:
+        * P1..P12  -> water (negative control)
+        * P13..P24 -> TCEP (positive control; reduces DCPIP directly)
     """
     metals = list(metals)[: len(PLATE_COLS)]
-    alcohols = list(alcohols)[: len(PLATE_ROWS) - 1]  # leave row P for "no substrate"
+    alcohols = list(alcohols)[: len(PLATE_ROWS) - 1]  # leave row P for controls
     m: dict[str, str] = {}
     s: dict[str, str] = {}
     for i, r in enumerate(PLATE_ROWS):
         for j, c in enumerate(PLATE_COLS):
             w = f"{r}{c}"
             m[w] = metals[j] if j < len(metals) else NO_METAL
-            s[w] = alcohols[i] if (r != "P" and i < len(alcohols)) else NO_SUBSTRATE
+            if r == "P":
+                s[w] = WATER_CONTROL if c <= 12 else TCEP_CONTROL
+            else:
+                s[w] = alcohols[i] if i < len(alcohols) else NO_SUBSTRATE
     no_metal_cols = len(PLATE_COLS) - len(metals)
     return PlateLayout(
         metal=m, substrate=s,
         description=(f"screen: {len(metals)} metals x {len(alcohols)} alcohols; "
-                     f"{no_metal_cols} no-metal col(s), rowP=no substrate"),
+                     f"{no_metal_cols} no-metal col(s); "
+                     f"row P cols 1-12 = water (neg), cols 13-24 = TCEP (pos)"),
     )
 
 
@@ -841,11 +851,36 @@ def plot_kcat_heatmap(result: PlateResult, out_svg: Path, title: str = "") -> No
 
     # Axis labels come from the layout (metals across, alcohols down).
     col_labels = [result.layout.metal.get(f"A{c}", "") for c in PLATE_COLS]
-    row_labels = [result.layout.substrate.get(f"{r}1", "") for r in PLATE_ROWS]
+
+    def _row_label(r: str) -> str:
+        s = result.layout.substrate.get(f"{r}1", "")
+        if s in (WATER_CONTROL, TCEP_CONTROL, NO_SUBSTRATE):
+            return "controls"
+        return s
+
+    row_labels = [_row_label(r) for r in PLATE_ROWS]
     ax.set_xticks(range(len(PLATE_COLS)))
     ax.set_xticklabels(col_labels, rotation=90)
     ax.set_yticks(range(len(PLATE_ROWS)))
     ax.set_yticklabels(row_labels)
+
+    # Visually separate the control row (P) from the assay rows with a
+    # dashed divider and a subtle shaded band.
+    p_idx = len(PLATE_ROWS) - 1  # row P is always the last row
+    p_any_control = any(
+        result.layout.is_water_control(f"P{c}") or result.layout.is_tcep_control(f"P{c}")
+        for c in PLATE_COLS
+    )
+    if p_any_control:
+        ax.axhline(p_idx - 0.5, color="0.3", lw=0.8, ls="--")
+        ax.add_patch(plt.Rectangle(
+            (-0.5, p_idx - 0.5), len(PLATE_COLS), 1.0,
+            facecolor="#e8e8e8", edgecolor="none", zorder=0,
+        ))
+        # Italic tick label to reinforce that the row is controls, not data.
+        ax.get_yticklabels()[p_idx].set_style("italic")
+        ax.get_yticklabels()[p_idx].set_color("0.4")
+
     ax.set_xlabel("metal (col)")
     ax.set_ylabel("substrate (row)")
     ax.set_title(title or "k$_{cat}$ (s$^{-1}$)")
