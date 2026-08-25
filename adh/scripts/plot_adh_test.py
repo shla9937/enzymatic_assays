@@ -48,6 +48,12 @@ NATURE_RC = {
     "axes.spines.right": False,
 }
 NATURE_PANEL_INCHES = (7.08, 5.20)
+CONCENTRATION_SIG_FIGS = 3
+
+
+def _format_concentration(concentration_uM: float) -> str:
+    """Format protein concentrations to the figure's stated significant figures."""
+    return f"{concentration_uM:.{CONCENTRATION_SIG_FIGS}g}"
 
 
 def _valid_trace(trace: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -132,27 +138,37 @@ def plot_active_traces(
     min_r2: float = 0.90,
     title: str = "",
 ) -> list[dict[str, float | str]]:
-    """Plot titration traces and their initial-fit quality statistics."""
+    """Plot titration traces and initial-fit statistics for each concentration."""
     plt.rcParams.update(NATURE_RC)
     time_min = _time_minutes(traces)
-    fig, axes = plt.subplots(1, 2, figsize=NATURE_PANEL_INCHES, layout="constrained")
-    titration_ax, quality_ax = axes
+    fig = plt.figure(figsize=NATURE_PANEL_INCHES, layout="constrained")
+    grid = fig.add_gridspec(3, 2, width_ratios=(1.4, 1.0), hspace=0.08, wspace=0.16)
+    titration_ax = fig.add_subplot(grid[:, 0])
+    quality_ax = fig.add_subplot(grid[0, 1])
+    window_ax = fig.add_subplot(grid[1, 1], sharex=quality_ax)
+    signal_ax = fig.add_subplot(grid[2, 1], sharex=quality_ax)
 
     candidate_wells = [
         f"{selected_row}{col}" for col in PLATE_COLS
         if _absorbance_drop(traces.traces[f"{selected_row}{col}"]) >= ACTIVE_DROP_AU
     ]
-    colours = plt.get_cmap("viridis")(np.linspace(0.15, 0.90, max(len(candidate_wells), 1)))
+    # Candidate wells run from highest protein concentration to the 0 µM control.
+    colours = plt.get_cmap("Blues")(np.linspace(0.90, 0.35, max(len(candidate_wells), 1)))
+    zero_indices, zero_values = _valid_trace(traces.traces[candidate_wells[-1]])
+    zero_initial_absorbance = float(zero_values[0]) if zero_values.size else np.nan
     linear_regions: list[dict[str, float | str]] = []
     for colour, well in zip(colours, candidate_wells):
-        concentration = start_protein_uM * dilution_factor ** (int(well[1:]) - 1)
+        concentration = (
+            0.0 if well == candidate_wells[-1]
+            else start_protein_uM * dilution_factor ** (int(well[1:]) - 1)
+        )
         indices, values = _valid_trace(traces.traces[well])
         well_time = time_min[indices]
         t0, t1, slope, intercept, r_squared, n_points = find_initial_linear_region(
             well_time, values, window_min=fit_window_min, min_r2=min_r2,
         )
         titration_ax.plot(time_min[indices], values, color=colour, lw=0.7,
-                          label=f"{well}: {concentration:g} µM")
+                          label=f"{_format_concentration(concentration)} µM")
         if n_points:
             region_time = well_time[:n_points]
             region_values = values[:n_points]
@@ -167,34 +183,74 @@ def plot_active_traces(
         linear_regions.append({
             "well": well, "protein_uM": concentration, "start_min": t0, "end_min": t1,
             "slope_A600_per_min": slope, "r_squared": r_squared, "n_points": n_points,
+            "fit_window_min": t1 - t0,
+            "initial_signal_retention_vs_zero_pct": (
+                100 * float(values[0]) / zero_initial_absorbance
+                if np.isfinite(zero_initial_absorbance) and zero_initial_absorbance != 0 else np.nan
+            ),
         })
     titration_ax.set_xlabel("time (min)")
     titration_ax.set_ylabel("A$_{600}$")
-    titration_ax.set_title(f"Protein titration: row {selected_row}")
+    titration_ax.set_title("Protein titration")
     titration_ax.legend(frameon=False, ncol=2, loc="upper right", fontsize=5)
     titration_ax.text(0.02, 0.02, "Dashed boxes: fitted initial regions",
                       transform=titration_ax.transAxes, ha="left", va="bottom", fontsize=5)
 
-    concentrations = np.asarray([float(region["protein_uM"]) for region in linear_regions])
     r_squared = np.asarray([float(region["r_squared"]) for region in linear_regions])
-    quality_ax.scatter(concentrations, r_squared, c=colours, s=16, edgecolors="none", zorder=3)
-    for region in linear_regions:
-        concentration_label = f"{float(region['protein_uM']):g} µM"
-        quality_ax.annotate(
-            f"{region['well']}\n{concentration_label}",
-            (float(region["protein_uM"]), float(region["r_squared"])),
-            xytext=(3, 3), textcoords="offset points", fontsize=5,
-        )
+    positions = np.arange(len(linear_regions))
+    concentration_ticks = [
+        _format_concentration(float(region["protein_uM"])) for region in linear_regions
+    ]
+    quality_ax.scatter(positions, r_squared, c=colours, s=16, edgecolors="none", zorder=3)
     quality_ax.axhline(min_r2, color="0.3", lw=0.5, ls="--", label=f"R² threshold ({min_r2:.2f})")
-    quality_ax.set_xscale("log")
-    quality_ax.set_xlabel("protein concentration (µM; assumed)")
+    quality_ax.set_xticks(positions, concentration_ticks)
+    quality_ax.set_xlabel("protein concentration (µM)")
     quality_ax.set_ylabel("initial-fit R²")
     quality_ax.set_title("Linear-region fit quality")
     quality_ax.set_ylim(min(0.85, float(np.nanmin(r_squared)) - 0.01), 1.002)
     quality_ax.legend(frameon=False, loc="lower left", fontsize=5)
 
+    window_lengths = np.asarray([float(region["fit_window_min"]) for region in linear_regions])
+    window_ax.bar(positions, window_lengths, color=colours, width=0.65, linewidth=0)
+    window_ax.set_xticks(positions, concentration_ticks)
+    window_ax.set_xlabel("protein concentration (µM)")
+    window_ax.set_ylabel("fit window (min)")
+    window_ax.set_title("Linear-region duration")
+
+    initial_retention = np.asarray([
+        float(region["initial_signal_retention_vs_zero_pct"]) for region in linear_regions
+    ])
+    signal_ax.axhline(100, color="0.3", lw=0.5, ls="--")
+    signal_ax.bar(positions, initial_retention, color=colours, width=0.65, linewidth=0)
+    signal_ax.set_ylabel("initial signal retained (%)")
+    signal_ax.set_title("Signal retained before first reading")
+    signal_ax.set_xticks(positions, concentration_ticks)
+    signal_ax.set_xlabel("protein concentration (µM)")
+    # Right-side statistics should read from the 0 µM control to the highest protein level.
+    quality_ax.invert_xaxis()
+
     if title:
         fig.suptitle(title, fontsize=7)
+    target_position = next(
+        (position for position, region in zip(positions, linear_regions)
+         if np.isclose(float(region["protein_uM"]), 1.5625)),
+        None,
+    )
+    if target_position is not None:
+        # Figure-level coordinates make this a single box spanning every statistic panel.
+        fig.canvas.draw()
+        x_display = quality_ax.transData.transform([
+            [target_position - 0.42, 0], [target_position + 0.42, 0],
+        ])
+        x_figure = fig.transFigure.inverted().transform(x_display)[:, 0]
+        top = min(0.985, quality_ax.get_position().y1 + 0.015)
+        bottom = signal_ax.get_position().y0
+        fig.add_artist(Rectangle(
+            (float(np.min(x_figure)), bottom),
+            float(np.ptp(x_figure)), top - bottom,
+            transform=fig.transFigure, fill=False, clip_on=False,
+            edgecolor="0.25", linewidth=0.8, linestyle="--", zorder=10,
+        ))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, format="pdf")
     fig.savefig(out_path.with_suffix(".png"), format="png", dpi=600)
@@ -207,6 +263,7 @@ def write_linear_regions(regions: list[dict[str, float | str]], out_path: Path) 
     with out_path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=[
             "well", "protein_uM", "start_min", "end_min", "slope_A600_per_min", "r_squared", "n_points",
+            "fit_window_min", "initial_signal_retention_vs_zero_pct",
         ])
         writer.writeheader()
         writer.writerows(regions)
