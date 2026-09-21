@@ -261,6 +261,7 @@ def _run_single(xlsx: Path, args, layout: "PlateLayout", eps_app: float) -> "Pla
     stem = args.label or xlsx.stem
     plot_traces_grid(result, outdir / f"{stem}_traces_grid.pdf", title=f"{stem} traces")
     plot_kcat_heatmap(result, outdir / f"{stem}_kcat_heatmap.pdf", title=f"{stem} k$_{{cat}}$", vmax=args.kcat_upper)
+    dump_well_table(result, outdir / f"{stem}_wells.csv")
     dump_stats(result, outdir / f"{stem}_stats.txt")
     print(f"[{xlsx.name}]")
     for k, v in result.stats.items():
@@ -309,6 +310,8 @@ def main() -> None:
                                outdir / f"{stem}_avg_heatmaps.pdf",
                                title=f"{stem}: mean/std of {len(results)} replicates", vmax=args.kcat_upper,
                                plate_results=results)
+        dump_averaged_wells(results, layout, outdir / f"{stem}_avg_wells.csv",
+                            replicate_labels=[x.stem for x in args.xlsx])
         print(f"Wrote averaged heat maps to {outdir}/{stem}_avg_heatmaps.pdf")
     else:
         for xlsx in args.xlsx:
@@ -1200,6 +1203,46 @@ def dump_well_table(result: PlateResult, out_csv: Path) -> None:
                 w.writerow([well, r, c, metal, sub,
                             fit.v0_abs_per_s, fit.kcat_s, fit.r_squared,
                             fit.window_s[0], fit.window_s[1], fit.n_points])
+
+
+def dump_averaged_wells(
+    results: list[PlateResult],
+    layout: PlateLayout,
+    out_csv: Path,
+    *,
+    replicate_labels: list[str] | None = None,
+) -> None:
+    """Per-well k_cat across replicates: mean, std, n, and one column per replicate."""
+    if replicate_labels is None:
+        replicate_labels = [f"rep{i + 1}" for i in range(len(results))]
+    grids = [r.kcat_grid() for r in results]
+    stack = np.stack(grids, axis=0)
+    mean_grid = np.nanmean(stack, axis=0)
+    std_grid = np.nanstd(stack, axis=0)
+    n_grid = np.sum(np.isfinite(stack), axis=0)
+
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    with out_csv.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        header = ["well", "row", "col", "metal", "substrate",
+                  "kcat_mean_s", "kcat_std_s", "n_replicates"]
+        header.extend(f"kcat_{lab}_s" for lab in replicate_labels)
+        w.writerow(header)
+        for i, r in enumerate(PLATE_ROWS):
+            for j, c in enumerate(PLATE_COLS):
+                well = f"{r}{c}"
+                metal = layout.metal.get(well, "")
+                sub = layout.substrate.get(well, "")
+                mean_v = mean_grid[i, j]
+                std_v = std_grid[i, j]
+                row = [well, r, c, metal, sub,
+                       "" if not np.isfinite(mean_v) else mean_v,
+                       "" if not np.isfinite(std_v) else std_v,
+                       int(n_grid[i, j])]
+                for k in range(stack.shape[0]):
+                    v = stack[k, i, j]
+                    row.append("" if not np.isfinite(v) else v)
+                w.writerow(row)
 
 
 def dump_stats(result: PlateResult, out_path: Path) -> None:
