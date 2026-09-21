@@ -234,31 +234,18 @@ class PlateResult:
 
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("xlsx", nargs="*", type=Path,
-                   help="One or more plate-reader .xlsx files. "
-                        "One = single plate; multiple with --average = triplicate.")
-    p.add_argument("--standard-curve", type=Path, default=None,
-                   help="DCPIP standard-curve .xlsx (fit on the fly for eps_app).")
-    p.add_argument("--eps", type=float, default=None,
-                   help=f"Override eps_app (AU/µM). Default {DEFAULT_EPS_APP_AU_PER_UM}.")
-    p.add_argument("--enzyme-uM", type=float, default=DEFAULT_ENZYME_CONC_UM,
-                   help=f"Enzyme concentration in µM (default {DEFAULT_ENZYME_CONC_UM}).")
-    p.add_argument("--window-s", type=float, default=300.0,
-                   help="Linear-fit window width in seconds (default 300 s).")
-    p.add_argument("--layout", choices=("test", "screen"), default="test",
-                   help="Plate layout preset: 'test' = uniform Ca+EtOH; 'screen' = metals x alcohols grid.")
-    p.add_argument("--label", type=str, default="",
-                   help="Label used in output filenames.")
-    p.add_argument("--outdir", type=Path, default=None,
-                   help="Directory for figures and stats (default: sibling outputs directory for each input plate).")
-    p.add_argument("--average", action="store_true",
-                   help="Treat multiple input files as replicates; output averaged heat map + std.")
-    p.add_argument("--compare", type=Path, default=None,
-                   help="JSON manifest {condition_name: [plate.xlsx, ...]} for cross-condition compare.")
-    p.add_argument("--rotate", choices=("auto", "off", "180"), default="auto",
-                   help="Handle plates loaded rotated 180 degrees. 'auto' (default) "
-                        "detects via the control-row signature and remaps well IDs; "
-                        "'off' disables any rotation; '180' forces rotation.")
+    p.add_argument("xlsx", nargs="*", type=Path, help="One or more plate-reader .xlsx files. One = single plate; multiple with --average = triplicate.")
+    p.add_argument("--standard-curve", type=Path, default=None, help="DCPIP standard-curve .xlsx (fit on the fly for eps_app).")
+    p.add_argument("--eps", type=float, default=None, help=f"Override eps_app (AU/µM). Default {DEFAULT_EPS_APP_AU_PER_UM}.")
+    p.add_argument("--enzyme-uM", type=float, default=DEFAULT_ENZYME_CONC_UM, help=f"Enzyme concentration in µM (default {DEFAULT_ENZYME_CONC_UM}).")
+    p.add_argument("--window-s", type=float, default=300.0, help="Linear-fit window width in seconds (default 300 s).")
+    p.add_argument("--kcat-upper", type=float, default=None, help="Upper color-scale bound for k_cat heatmaps (s^-1), including mean/std and comparisons; must be finite and positive. Lower bound is 0; default upper bound is automatic.")
+    p.add_argument("--layout", choices=("test", "screen"), default="test", help="Plate layout preset: 'test' = uniform Ca+EtOH; 'screen' = metals x alcohols grid.")
+    p.add_argument("--label", type=str, default="", help="Label used in output filenames.")
+    p.add_argument("--outdir", type=Path, default=None, help="Directory for figures and stats (default: sibling outputs directory for each input plate).")
+    p.add_argument("--average", action="store_true", help="Treat multiple input files as replicates; output averaged heat map + std.")
+    p.add_argument("--compare", type=Path, default=None, help="JSON manifest {condition_name: [plate.xlsx, ...]} for cross-condition compare.")
+    p.add_argument("--rotate", choices=("auto", "off", "180"), default="auto", help="Handle plates loaded rotated 180 degrees. 'auto' (default) detects via the control-row signature and remaps well IDs; 'off' disables any rotation; '180' forces rotation.")
     return p
 
 
@@ -273,7 +260,7 @@ def _run_single(xlsx: Path, args, layout: "PlateLayout", eps_app: float) -> "Pla
     outdir = args.outdir or _default_outdir(xlsx)
     stem = args.label or xlsx.stem
     plot_traces_grid(result, outdir / f"{stem}_traces_grid.pdf", title=f"{stem} traces")
-    plot_kcat_heatmap(result, outdir / f"{stem}_kcat_heatmap.pdf", title=f"{stem} k$_{{cat}}$")
+    plot_kcat_heatmap(result, outdir / f"{stem}_kcat_heatmap.pdf", title=f"{stem} k$_{{cat}}$", vmax=args.kcat_upper)
     dump_stats(result, outdir / f"{stem}_stats.txt")
     print(f"[{xlsx.name}]")
     for k, v in result.stats.items():
@@ -282,7 +269,10 @@ def _run_single(xlsx: Path, args, layout: "PlateLayout", eps_app: float) -> "Pla
 
 
 def main() -> None:
-    args = _build_argparser().parse_args()
+    parser = _build_argparser()
+    args = parser.parse_args()
+    if args.kcat_upper is not None and (not np.isfinite(args.kcat_upper) or args.kcat_upper <= 0):
+        parser.error("--kcat-upper must be finite and greater than 0.")
     eps_app = load_eps_app(args.eps, args.standard_curve)
 
     if args.compare is not None:
@@ -301,7 +291,7 @@ def main() -> None:
             cond_grids[name] = mean_grid
         compare_conditions(cond_grids, layout,
                            outdir / "compare_conditions.pdf",
-                           outdir / "compare_conditions.csv")
+                           outdir / "compare_conditions.csv", vmax=args.kcat_upper)
         print(f"Wrote comparison across {len(cond_grids)} conditions to {outdir}/compare_conditions.*")
         return
 
@@ -317,7 +307,8 @@ def main() -> None:
         stem = args.label or "average"
         plot_averaged_heatmaps(mean_grid, std_grid, layout,
                                outdir / f"{stem}_avg_heatmaps.pdf",
-                               title=f"{stem}: mean/std of {len(results)} replicates")
+                               title=f"{stem}: mean/std of {len(results)} replicates", vmax=args.kcat_upper,
+                               plate_results=results)
         print(f"Wrote averaged heat maps to {outdir}/{stem}_avg_heatmaps.pdf")
     else:
         for xlsx in args.xlsx:
@@ -835,47 +826,72 @@ def plot_traces_grid(result: PlateResult, out_svg: Path, title: str = "") -> Non
     plt.close(fig)
 
 
-def plot_kcat_heatmap(result: PlateResult, out_svg: Path, title: str = "") -> None:
+def plot_kcat_heatmap(result: PlateResult, out_svg: Path, title: str = "", *, vmax: float | None = None) -> None:
     """Nature-panel-sized k_cat heat map with row/col condition labels."""
     plt.rcParams.update(NATURE_RC)
     fig = plt.figure(figsize=NATURE_PANEL_INCHES)
     grid_spec = fig.add_gridspec(
         2, 2, height_ratios=(15, 1), width_ratios=(1, 0.035), hspace=0.34, wspace=0.06,
     )
-    ax = fig.add_subplot(grid_spec[0, 0])
-    control_ax = fig.add_subplot(grid_spec[1, 0], sharex=ax)
-    kcat_cbar_container = fig.add_subplot(grid_spec[0, 1])
-    kcat_cbar_container.set_axis_off()
-    grid = result.kcat_grid()
+    _draw_kcat_heatmap(
+        fig, grid_spec, result.kcat_grid(), _control_abs_grid(result), result.layout,
+        title=title, vmax=vmax, z_raw=result.stats.get("z_prime_raw", float("nan")),
+        rotation_applied=result.rotation_applied,
+    )
+    fig.subplots_adjust(left=0.18, right=0.88, bottom=0.18, top=0.90)
+    out_svg.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_svg, format="pdf")
+    fig.savefig(out_svg.with_suffix(".png"), format="png", dpi=600)
+    plt.close(fig)
 
-    finite = grid[:-1][np.isfinite(grid[:-1])]
-    if finite.size:
-        vmin = 0.0
-        vmax = np.nanpercentile(finite, 98)
-        if vmax <= vmin:
-            vmax = 1.0
-    else:
-        vmin, vmax = 0.0, 1.0
-    cmap = plt.get_cmap("gray_r").copy()
-    cmap.set_bad("#ff5252")
-    im = ax.imshow(grid[:-1], cmap=cmap, aspect="auto", vmin=vmin, vmax=vmax)
 
-    # Controls represent assay-quality signal rather than enzyme turnover.
-    # Overlay their mean early raw absorbance in a single blue colour scale so
-    # they are visually distinct from the black kcat heatmap.
-    control_abs = np.full_like(grid, np.nan)
+def _control_abs_grid(result: PlateResult) -> np.ndarray:
+    """Per-control mean raw absorbance over the same early window as plate QC."""
+    control_abs = np.full((len(PLATE_ROWS), len(PLATE_COLS)), np.nan)
     zprime_mask = result.traces.times_s <= Z_PRIME_WINDOW_S
     if not np.any(zprime_mask):
         zprime_mask = np.zeros_like(result.traces.times_s, dtype=bool)
         zprime_mask[: min(3, len(result.traces.times_s))] = True
-    for i, r in enumerate(PLATE_ROWS):
-        for j, c in enumerate(PLATE_COLS):
-            well = f"{r}{c}"
+    for row_index, row in enumerate(PLATE_ROWS):
+        for col_index, col in enumerate(PLATE_COLS):
+            well = f"{row}{col}"
             if not (result.layout.is_water_control(well) or result.layout.is_tcep_control(well)):
                 continue
             trace = result.traces.traces.get(well)
             if trace is not None:
-                control_abs[i, j] = np.nanmean(trace[zprime_mask])
+                control_abs[row_index, col_index] = np.nanmean(trace[zprime_mask])
+    return control_abs
+
+
+def _draw_kcat_heatmap(
+    fig,
+    grid_spec,
+    grid: np.ndarray,
+    control_abs: np.ndarray,
+    layout: PlateLayout,
+    *,
+    title: str = "",
+    vmax: float | None = None,
+    z_raw: float = float("nan"),
+    rotation_applied: bool = False,
+    control_label: str = "Raw absorbance",
+) -> None:
+    """Draw assay turnover and a separate raw-control strip with shared scaling rules."""
+    ax = fig.add_subplot(grid_spec[0, 0])
+    control_ax = fig.add_subplot(grid_spec[1, 0], sharex=ax)
+    kcat_cbar_container = fig.add_subplot(grid_spec[0, 1])
+    kcat_cbar_container.set_axis_off()
+
+    finite = grid[:-1][np.isfinite(grid[:-1])]
+    vmin = 0.0
+    if vmax is None:
+        vmax = float(np.nanpercentile(finite, 98)) if finite.size else 1.0
+        if vmax <= 0:
+            vmax = 1.0
+    cmap = plt.get_cmap("gray_r").copy()
+    cmap.set_bad("#ff5252")
+    im = ax.imshow(grid[:-1], cmap=cmap, aspect="auto", vmin=vmin, vmax=vmax)
+
     control_values = control_abs[np.isfinite(control_abs)]
     control_im = None
     if control_values.size:
@@ -892,10 +908,10 @@ def plot_kcat_heatmap(result: PlateResult, out_svg: Path, title: str = "") -> No
         )
 
     # Axis labels come from the layout (metals across, alcohols down).
-    col_labels = [result.layout.metal.get(f"A{c}", "") for c in PLATE_COLS]
+    col_labels = [layout.metal.get(f"A{c}", "") for c in PLATE_COLS]
 
     def _row_label(r: str) -> str:
-        s = result.layout.substrate.get(f"{r}1", "")
+        s = layout.substrate.get(f"{r}1", "")
         if s in (WATER_CONTROL, TCEP_CONTROL, NO_SUBSTRATE):
             return "controls"
         return s
@@ -909,7 +925,7 @@ def plot_kcat_heatmap(result: PlateResult, out_svg: Path, title: str = "") -> No
     # Draw controls in a separate strip: row P has no metals, so it should not
     # inherit the metal-axis labels used by the assay heatmap.
     p_any_control = any(
-        result.layout.is_water_control(f"P{c}") or result.layout.is_tcep_control(f"P{c}")
+        layout.is_water_control(f"P{c}") or layout.is_tcep_control(f"P{c}")
         for c in PLATE_COLS
     )
     if p_any_control:
@@ -926,11 +942,10 @@ def plot_kcat_heatmap(result: PlateResult, out_svg: Path, title: str = "") -> No
     ax.set_ylabel("substrate (row)")
     ax.set_title(title or "k$_{cat}$ (s$^{-1}$)")
 
-    z_raw = result.stats.get("z_prime_raw", float("nan"))
     if np.isfinite(z_raw):
         control_ax.text(0.99, 1.35, f"Z'$_{{raw}}$ = {z_raw:.2f}",
                 transform=control_ax.transAxes, ha="right", va="bottom", fontsize=6)
-    if result.rotation_applied:
+    if rotation_applied:
         ax.text(0.0, 1.02, "plate rotated 180° (auto-corrected)",
                 transform=ax.transAxes, ha="left", va="bottom",
                 fontsize=7, color="crimson")
@@ -949,13 +964,7 @@ def plot_kcat_heatmap(result: PlateResult, out_svg: Path, title: str = "") -> No
         control_cb.ax.tick_params(labelsize=5, pad=1, length=1.5)
         control_cb.outline.set_linewidth(0.4)
         control_cb.ax.xaxis.set_label_position("top")
-        control_cb.set_label("Raw absorbance", fontsize=5, labelpad=1)
-
-    fig.subplots_adjust(left=0.18, right=0.88, bottom=0.18, top=0.90)
-    out_svg.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_svg, format="pdf")
-    fig.savefig(out_svg.with_suffix(".png"), format="png", dpi=600)
-    plt.close(fig)
+        control_cb.set_label(control_label, fontsize=5, labelpad=1)
 
 
 # =============================================================================
@@ -974,28 +983,39 @@ def plot_averaged_heatmaps(
     layout: PlateLayout,
     out_svg: Path,
     title: str = "",
+    *,
+    vmax: float | None = None,
+    plate_results: list[PlateResult] | None = None,
 ) -> None:
-    """Side-by-side mean / std k_cat heat maps for a triplicate average."""
-    plt.rcParams.update(NATURE_RC)
-    fig, axes = plt.subplots(1, 2, figsize=(NATURE_PANEL_INCHES[0] * 2, NATURE_PANEL_INCHES[1]))
-    col_labels = [layout.metal.get(f"A{c}", "") for c in PLATE_COLS]
-    row_labels = [layout.substrate.get(f"{r}1", "") for r in PLATE_ROWS]
+    """Mean/std of per-plate k_cat, with raw-control summaries kept separate.
 
-    for ax, grid, label in zip(axes, [mean_grid, std_grid], ["mean k$_{cat}$", "std k$_{cat}$"]):
-        finite = grid[np.isfinite(grid)]
-        vmin = np.nanpercentile(finite, 2) if finite.size else 0
-        vmax = np.nanpercentile(finite, 98) if finite.size else 1
-        cmap = plt.get_cmap("gray_r").copy()
-        cmap.set_bad("#ff5252")
-        im = ax.imshow(grid, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
-        ax.set_xticks(range(len(PLATE_COLS))); ax.set_xticklabels(col_labels, rotation=90)
-        ax.set_yticks(range(len(PLATE_ROWS))); ax.set_yticklabels(row_labels)
-        ax.set_title(label)
-        cb = fig.colorbar(im, ax=ax, shrink=0.85, pad=0.02)
-        cb.ax.tick_params(labelsize=6); cb.outline.set_linewidth(0.4)
+    Supply plate_results to show mean/std of the per-plate early control absorbance.
+    Without them, the control strips remain empty rather than showing control k_cat.
+    """
+    plt.rcParams.update(NATURE_RC)
+    fig = plt.figure(figsize=(NATURE_PANEL_INCHES[0] * 2, NATURE_PANEL_INCHES[1]))
+    panels = fig.add_gridspec(1, 2, wspace=0.45)
+    control_mean = np.full_like(mean_grid, np.nan)
+    control_std = np.full_like(std_grid, np.nan)
+    if plate_results:
+        control_stack = np.stack([_control_abs_grid(result) for result in plate_results])
+        valid = np.any(np.isfinite(control_stack), axis=0)
+        control_mean[valid] = np.nanmean(control_stack[:, valid], axis=0)
+        control_std[valid] = np.nanstd(control_stack[:, valid], axis=0)
+
+    for panel, grid, controls, label in zip(
+        panels, [mean_grid, std_grid], [control_mean, control_std], ["mean", "std"],
+    ):
+        grid_spec = panel.subgridspec(
+            2, 2, height_ratios=(15, 1), width_ratios=(1, 0.035), hspace=0.34, wspace=0.06,
+        )
+        _draw_kcat_heatmap(
+            fig, grid_spec, grid, controls, layout, title=f"{label} k$_{{cat}}$",
+            vmax=vmax, control_label=f"{label} raw absorbance",
+        )
     if title:
         fig.suptitle(title, fontsize=7)
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.09, right=0.94, bottom=0.18, top=0.90)
     out_svg.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_svg, format="pdf")
     fig.savefig(out_svg.with_suffix(".png"), format="png", dpi=600)
@@ -1007,6 +1027,8 @@ def compare_conditions(
     layout: PlateLayout,
     out_svg: Path,
     out_csv: Path,
+    *,
+    vmax: float | None = None,
 ) -> None:
     """Render a grid of k_cat heat maps, one per (protein, pH) condition, and dump
     a tidy CSV: condition,well,row_label,col_label,kcat.
@@ -1021,11 +1043,11 @@ def compare_conditions(
                              squeeze=False)
 
     all_vals = np.concatenate([g[np.isfinite(g)].ravel() for g in condition_grids.values()])
-    if all_vals.size:
-        vmin = float(np.nanpercentile(all_vals, 2))
-        vmax = float(np.nanpercentile(all_vals, 98))
-    else:
-        vmin, vmax = 0.0, 1.0
+    vmin = 0.0
+    if vmax is None:
+        vmax = float(np.nanpercentile(all_vals, 98)) if all_vals.size else 1.0
+        if vmax <= 0:
+            vmax = 1.0
 
     col_labels = [layout.metal.get(f"A{c}", "") for c in PLATE_COLS]
     row_labels = [layout.substrate.get(f"{r}1", "") for r in PLATE_ROWS]
