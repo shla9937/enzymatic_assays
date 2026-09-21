@@ -22,20 +22,24 @@ Usage
 
     # CLI form (repeat --condition per file):
     python compare_proteins.py \\
-        --condition ADH1 7  path/to/ADH1_pH7_avg_wells.csv \\
-        --condition ADH1 8  path/to/ADH1_pH8_avg_wells.csv \\
+        --condition PedE 6  path/to/PedE_pH6_avg_wells.csv \\
         --condition PedE 7  path/to/PedE_pH7_avg_wells.csv \\
         --condition PedE 8  path/to/PedE_pH8_avg_wells.csv \\
+        --condition PedH 6  path/to/PedH_pH6_avg_wells.csv \\
+        --condition PedH 7  path/to/PedH_pH7_avg_wells.csv \\
+        --condition PedH 8  path/to/PedH_pH8_avg_wells.csv \\
         --outdir outputs/
 
 Manifest JSON
 -------------
     {
       "conditions": [
-        {"protein": "ADH1", "pH": 7.0, "csv": "outputs/ADH1_pH7_avg_wells.csv"},
-        {"protein": "ADH1", "pH": 8.0, "csv": "outputs/ADH1_pH8_avg_wells.csv"},
+                {"protein": "PedE", "pH": 6.0, "csv": "outputs/PedE_pH6_avg_wells.csv"},
         {"protein": "PedE", "pH": 7.0, "csv": "outputs/PedE_pH7_avg_wells.csv"},
-        {"protein": "PedE", "pH": 8.0, "csv": "outputs/PedE_pH8_avg_wells.csv"}
+                {"protein": "PedE", "pH": 8.0, "csv": "outputs/PedE_pH8_avg_wells.csv"},
+                {"protein": "PedH", "pH": 6.0, "csv": "outputs/PedH_pH6_avg_wells.csv"},
+                {"protein": "PedH", "pH": 7.0, "csv": "outputs/PedH_pH7_avg_wells.csv"},
+                {"protein": "PedH", "pH": 8.0, "csv": "outputs/PedH_pH8_avg_wells.csv"}
       ]
     }
 """
