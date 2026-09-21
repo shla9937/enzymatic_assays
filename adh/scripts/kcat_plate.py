@@ -875,12 +875,21 @@ def _draw_kcat_heatmap(
     z_raw: float = float("nan"),
     rotation_applied: bool = False,
     control_label: str = "Raw absorbance",
+    show_tcep: bool = True,
 ) -> None:
     """Draw assay turnover and a separate raw-control strip with shared scaling rules."""
     ax = fig.add_subplot(grid_spec[0, 0])
     control_ax = fig.add_subplot(grid_spec[1, 0], sharex=ax)
     kcat_cbar_container = fig.add_subplot(grid_spec[0, 1])
     kcat_cbar_container.set_axis_off()
+
+    if not show_tcep:
+        # TCEP is a positive control for QC only; suppress it from the raw-control
+        # strip so averaged/summary heatmaps show just the water baseline.
+        control_abs = control_abs.copy()
+        tcep_cols = [j for j, c in enumerate(PLATE_COLS) if layout.is_tcep_control(f"P{c}")]
+        if tcep_cols:
+            control_abs[-1, tcep_cols] = np.nan
 
     finite = grid[:-1][np.isfinite(grid[:-1])]
     vmin = 0.0
@@ -929,9 +938,12 @@ def _draw_kcat_heatmap(
         for c in PLATE_COLS
     )
     if p_any_control:
-        control_ax.axvline(11.5, color="0.3", lw=0.8, ls="--")
-        control_ax.text(5.5, -0.85, "water", ha="center", va="top", fontsize=5)
-        control_ax.text(17.5, -0.85, "TCEP", ha="center", va="top", fontsize=5)
+        if show_tcep:
+            control_ax.axvline(11.5, color="0.3", lw=0.8, ls="--")
+            control_ax.text(5.5, -0.85, "water", ha="center", va="top", fontsize=5)
+            control_ax.text(17.5, -0.85, "TCEP", ha="center", va="top", fontsize=5)
+        else:
+            control_ax.text(5.5, -0.85, "water", ha="center", va="top", fontsize=5)
     control_ax.set_xlim(-0.5, len(PLATE_COLS) - 0.5)
     control_ax.tick_params(axis="x", bottom=False, labelbottom=False)
     control_ax.set_yticks([0])
@@ -1011,7 +1023,7 @@ def plot_averaged_heatmaps(
         )
         _draw_kcat_heatmap(
             fig, grid_spec, grid, controls, layout, title=f"{label} k$_{{cat}}$",
-            vmax=vmax, control_label=f"{label} raw absorbance",
+            vmax=vmax, control_label=f"{label} raw absorbance", show_tcep=False,
         )
     if title:
         fig.suptitle(title, fontsize=7)
